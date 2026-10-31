@@ -37,12 +37,14 @@
     rows,
     groups,
     onfilter,
+    embedded = false,
   }: {
     dbId: string;
     view: DbView;
     rows: DbRow[];
     groups: Group[] | null;
     onfilter?: (p: Property) => void;
+    embedded?: boolean;
   } = $props();
 
   const WIDTH: Partial<Record<PropertyType, number>> = {
@@ -84,8 +86,15 @@
   const pinnedSet = $derived(new Set(pinned.pinned));
   const lastPinned = $derived(pinned.pinned.at(-1) ?? null);
 
+  let contentW = $state(0);
+  let railVisible = $state(false);
+
   function measure() {
-    if (body) viewportW = body.clientWidth;
+    if (!body) return;
+    viewportW = body.clientWidth;
+    contentW = body.scrollWidth;
+    const more = embedded && body.scrollWidth > body.clientWidth + 1;
+    if (more !== railVisible) railVisible = more;
   }
 
   /** The same geometry the strip uses, asked for one candidate boundary. */
@@ -193,11 +202,41 @@
   // The header strip and the rows scroll sideways together (either can lead:
   // focusing a header button scrolls the strip).
   let headWrap: HTMLDivElement;
-  // Positions this component just mirrored into the header/body. Their scroll
-  // events arrive later; matching those positions is our own echo, not a new
-  // gesture, and must not be written back.
+  // Positions this component just mirrored into the header, body or rail. Their
+  // scroll events arrive later; matching those positions is our own echo, not a
+  // new gesture, and must not be written back.
   let programmaticHead: number | null = null;
   let programmaticBody: number | null = null;
+  let programmaticRail: number | null = null;
+  let rail = $state<HTMLDivElement>();
+
+  /** A rail that mounts late (wider content, restored columns) starts where the rows already are. */
+  $effect(() => {
+    if (rail && body) mirrorRail(body.scrollLeft);
+  });
+
+  function mirrorRail(left: number) {
+    if (!rail || Math.abs(rail.scrollLeft - left) < 1) return;
+    rail.scrollLeft = left;
+    programmaticRail = rail.scrollLeft;
+  }
+
+  function syncRailScroll() {
+    if (!rail || !body) return;
+    const left = rail.scrollLeft;
+    if (programmaticRail !== null && Math.abs(left - programmaticRail) < 1) {
+      return;
+    }
+    programmaticRail = null;
+    if (Math.abs(body.scrollLeft - left) >= 1) {
+      body.scrollLeft = left;
+      programmaticBody = body.scrollLeft;
+    }
+    if (headWrap && Math.abs(headWrap.scrollLeft - left) >= 1) {
+      headWrap.scrollLeft = left;
+      programmaticHead = headWrap.scrollLeft;
+    }
+  }
 
   function syncHeadScroll() {
     if (!headWrap || !body) return;
@@ -210,6 +249,7 @@
       body.scrollLeft = left;
       programmaticBody = body.scrollLeft;
     }
+    mirrorRail(left);
   }
 
   function syncBodyScroll() {
@@ -223,6 +263,7 @@
       headWrap.scrollLeft = left;
       programmaticHead = headWrap.scrollLeft;
     }
+    mirrorRail(left);
   }
 
   const range = $derived.by(() => {
@@ -821,6 +862,14 @@
     </div>
   {/if}
 
+  {#if railVisible}
+    <!-- A wide embedded table keeps a scrollbar within reach at its top. It is
+         aria-hidden, so it must never take keyboard focus either. -->
+    <div class="rail" bind:this={rail} onscroll={syncRailScroll} aria-hidden="true" tabindex="-1">
+      <div class="rail-space" style:width="{contentW}px"></div>
+    </div>
+  {/if}
+
   <div class="head-wrap" bind:this={headWrap} onscroll={syncHeadScroll}>
     <div class="head-inner">
     <div class="head" bind:this={head} role="row" style:grid-template-columns={template}>
@@ -1022,6 +1071,28 @@
     width: max-content;
     min-width: 100%;
     padding: 0 var(--edge-r) 0 var(--edge-l);
+  }
+  .rail {
+    flex: none;
+    overflow-x: auto;
+    overflow-y: hidden;
+    height: 12px;
+  }
+  .rail::-webkit-scrollbar {
+    height: 10px;
+  }
+  .rail::-webkit-scrollbar-thumb {
+    min-width: 40px;
+    border: 3px solid transparent;
+    background-color: color-mix(in srgb, var(--text-3) 45%, transparent);
+    background-clip: content-box;
+    border-radius: 999px;
+  }
+  .rail:hover::-webkit-scrollbar-thumb {
+    background-color: var(--text-3);
+  }
+  .rail-space {
+    height: 1px;
   }
   /* The header sticks to the top while the page scrolls, and follows the
      body sideways (it's a separate strip, scrolled in step). */
